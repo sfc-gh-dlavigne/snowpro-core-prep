@@ -61,20 +61,37 @@ pip install -r requirements.txt
 
 ### 2. Configure your Snowflake connection
 
-**Simplest: `.streamlit/secrets.toml`**
+The app resolves a connection in this order (first match wins):
 
-Copy the example file and fill in your credentials:
+**1. `SNOWFLAKE_CONNECTION_NAME` environment variable (highest priority)**
+
+The name of a connection defined in `~/.snowflake/connections.toml`. Pass it inline so the value reaches the Streamlit process:
+
+```bash
+SNOWFLAKE_CONNECTION_NAME=my-connection streamlit run snowpro_study_app.py
+```
+
+**2. `.streamlit/secrets.toml`**
+
+A `[connections.snowflake]` block (this is also the path used by Streamlit in Snowflake). Copy the template and fill it in:
 
 ```bash
 cp .streamlit/secrets.toml.example .streamlit/secrets.toml
-# edit .streamlit/secrets.toml with your account/user/password/warehouse
+# edit with your account / user / auth / warehouse
 ```
 
-The app will pick this up automatically via `st.connection("snowflake")`.
+**3. Default connection (no env var, no secrets.toml)**
 
-**Alternative: named connection in `~/.snowflake/connections.toml`**
+The connector uses your default connection — `default_connection_name` in `~/.snowflake/config.toml`:
 
-If you already have a connection configured (e.g. via the Snowflake CLI / connector):
+```toml
+# ~/.snowflake/config.toml
+default_connection_name = "my-connection"
+```
+
+> **Gotcha:** `default_connection_name` must live in **`config.toml`**, *not* `connections.toml`. Placing it in `connections.toml` silently breaks default resolution (the connector treats it as a bogus connection) and also breaks `snow connection list`.
+
+Named connections live in `~/.snowflake/connections.toml` and are **case-sensitive** — the value you use above must match a `[section]` exactly:
 
 ```toml
 # ~/.snowflake/connections.toml
@@ -84,18 +101,7 @@ user      = "jsmith"
 authenticator = "externalbrowser"   # or "username_password_mfa", or omit for password
 ```
 
-Then tell the app which named connection to use via an environment variable:
-
-```bash
-export SNOWFLAKE_CONNECTION_NAME=my-connection
-streamlit run snowpro_study_app.py
-```
-
-If `SNOWFLAKE_CONNECTION_NAME` is not set, the connector falls back to your
-**default** connection (`default_connection_name` in `~/.snowflake/config.toml`,
-or a `[default]` entry). Note: the `.streamlit/secrets.toml` method above takes
-priority when present. The connection name is **not** stored in `secrets.toml` —
-it only selects a section of `connections.toml`.
+The connection name is **not** stored in `secrets.toml` — it only selects a section of `connections.toml`.
 
 ### 3. Run
 
@@ -140,6 +146,7 @@ Note: `progress.json` and `questions_cache.json` will not persist between SiS se
 - **Recommended:** Use the **Pre-load Cache** page (sidebar) before taking a timed exam. It bulk-generates all 204 questions (or just the 102 exam-variation questions) in batches so the exam runs without any generation pauses.
 - If you skip pre-loading, questions are generated live the first time you open each domain in Study mode (expect 15–30 seconds per question while Cortex generates and verifies citations). Subsequent visits use the local cache.
 - If generation fails (e.g. no VPN / Cortex unavailable), the app falls back to a small built-in static question bank automatically.
+- If the connection drops mid-session, the warning banner shows a **🔁 Reconnect to Snowflake** button so you can re-authenticate without leaving your exam or study session. It reports the underlying reason if it still can't connect.
 - **Reset Stats** (Progress page) clears your exam and study scores without touching the question cache.
 - **Reset Questions** (Progress page) clears the question cache and forces fresh generation on next access.
 

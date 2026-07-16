@@ -96,6 +96,9 @@ def log_error(message: str):
     st.session_state.error_unseen_count += 1
 
 
+_LAST_CONN_ERROR = ""   # most recent reason get_snowflake_connection() failed
+
+
 @st.cache_resource
 def get_snowflake_connection():
     """
@@ -105,20 +108,45 @@ def get_snowflake_connection():
        Set the SNOWFLAKE_CONNECTION_NAME env var to select a specific named
        connection; if unset, the connector's default connection is used.
     After connecting, ensures an active warehouse is set (required for Cortex calls).
+    The most recent failure reason is stashed in _LAST_CONN_ERROR so the UI can
+    surface WHY a connection couldn't be made.
     """
+    global _LAST_CONN_ERROR
     conn = None
-    try:
-        conn = st.connection("snowflake")._instance
-    except Exception:
-        pass
+
+    # 1. An explicitly-set SNOWFLAKE_CONNECTION_NAME wins — it is the user's
+    #    deliberate choice and must override any default or secrets.toml.
+    conn_name = os.environ.get("SNOWFLAKE_CONNECTION_NAME")
+    if conn_name:
+        try:
+            import snowflake.connector
+            conn = snowflake.connector.connect(connection_name=conn_name)
+            _LAST_CONN_ERROR = ""
+        except Exception as e:
+            _LAST_CONN_ERROR = f"connect(connection_name={conn_name!r}) failed: {e}"
+
+    # 2. Streamlit-native — used in Streamlit in Snowflake (SiS) and when a
+    #    .streamlit/secrets.toml [connections.snowflake] block is present.
+    if conn is None:
+        try:
+            conn = st.connection("snowflake")._instance
+            if conn is not None:
+                _LAST_CONN_ERROR = ""
+        except Exception as e:
+            _LAST_CONN_ERROR = f"st.connection('snowflake'): {e}"
+
+    # 3. Connector's default connection (default_connection_name in config.toml).
     if conn is None:
         try:
             import snowflake.connector
-            conn_name = os.environ.get("SNOWFLAKE_CONNECTION_NAME")
-            conn = (snowflake.connector.connect(connection_name=conn_name)
-                    if conn_name else snowflake.connector.connect())
-        except Exception:
-            return None
+            conn = snowflake.connector.connect()
+            _LAST_CONN_ERROR = ""
+        except Exception as e:
+            _LAST_CONN_ERROR = ("no SNOWFLAKE_CONNECTION_NAME set and the default "
+                                f"connection could not be opened: {e}")
+
+    if conn is None:
+        return None
 
     # Ensure an active warehouse — required even for serverless Cortex functions
     try:
@@ -560,7 +588,7 @@ def _check_connection() -> tuple:
     (and before reset actions wipe the cache)."""
     conn = get_snowflake_connection()
     if conn is None:
-        return False, "No Snowflake connection available."
+        return False, (_LAST_CONN_ERROR or "No Snowflake connection available.")
     try:
         cur = conn.cursor()
         cur.execute("SELECT 1")
@@ -1084,13 +1112,30 @@ Return ONLY valid JSON with no markdown fences:
 
 
 def show_connection_warning_if_needed():
-    """Show a banner if Snowflake is unreachable. Called at top of exam/study pages."""
+    """Show a banner if Snowflake is unreachable. Called at top of exam/study pages.
+    Offers an inline reconnect so the user doesn't have to leave a test to recover."""
     if get_snowflake_connection() is None:
         st.warning(
-            "⚠️ Could not connect to Snowflake — using static question bank. "
-            "Check your VPN or re-authenticate (`snow connection test`).",
+            "Could not connect to Snowflake — using static question bank. "
+            "Check your VPN or re-authenticate (`snow connection test`), then reconnect.",
             icon="⚠️"
         )
+        c1, _ = st.columns([1, 2])
+        with c1:
+            if st.button("🔁 Reconnect to Snowflake", key="conn_warn_reconnect",
+                         type="primary", use_container_width=True):
+                # The cache_resource entry is holding a stale None; clear it and
+                # force a fresh connect (re-auth) right here so the user can stay
+                # on the current page instead of leaving to the pre-load screen.
+                get_snowflake_connection.clear()
+                with st.spinner("Reconnecting to Snowflake…"):
+                    ok, err = _check_connection()
+                if ok:
+                    st.rerun()
+                else:
+                    st.error(f"Still can't reach Snowflake: {err or 'no connection configured'}. "
+                             "Check VPN / auth, or confirm a Snowflake connection is configured "
+                             "(SNOWFLAKE_CONNECTION_NAME or a default connection).")
         return True
     return False
 
