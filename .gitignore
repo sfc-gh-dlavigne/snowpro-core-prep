@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Local runtime state (personal / machine-specific) — never publish
+progress.json
+preload_timing.log
+.snowflake/
+
+# Local secrets — never commit real credentials (only the .example files are tracked)
+.streamlit/secrets.toml
+secrets.toml
+
+# Internal planning docs
+*.plan.md
+
+# OS cruft
+.DS_Store
