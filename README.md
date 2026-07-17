@@ -71,23 +71,27 @@ The name of a connection defined in `~/.snowflake/connections.toml`. Pass it inl
 SNOWFLAKE_CONNECTION_NAME=my-connection streamlit run snowpro_study_app.py
 ```
 
-**2. `.streamlit/secrets.toml`**
+**2. `.streamlit/secrets.toml` (if present)**
 
-A `[connections.snowflake]` block (this is also the path used by Streamlit in Snowflake). Copy the template and fill it in:
+A `[connections.snowflake]` block — an explicit, app-scoped choice, so it is preferred over the default connection when present (and it's the path Streamlit in Snowflake uses automatically). Copy the template and fill it in:
 
 ```bash
 cp .streamlit/secrets.toml.example .streamlit/secrets.toml
 # edit with your account / user / auth / warehouse
 ```
 
+The connection name is **not** stored in `secrets.toml` — it only selects a section of `connections.toml`.
+
 **3. Default connection (no env var, no secrets.toml)**
 
-The connector uses your default connection — `default_connection_name` in `~/.snowflake/config.toml`:
+If neither of the above is set, the app uses your default connection — `default_connection_name` in `~/.snowflake/config.toml`:
 
 ```toml
 # ~/.snowflake/config.toml
 default_connection_name = "my-connection"
 ```
+
+The app resolves that name and connects to it by name (not anonymously), so it can apply its own connection options — see the browser-sign-in note below.
 
 > **Gotcha:** `default_connection_name` must live in **`config.toml`**, *not* `connections.toml`. Placing it in `connections.toml` silently breaks default resolution (the connector treats it as a bogus connection) and also breaks `snow connection list`.
 
@@ -98,10 +102,10 @@ Named connections live in `~/.snowflake/connections.toml` and are **case-sensiti
 [my-connection]
 account   = "xy12345.us-east-1"
 user      = "jsmith"
-authenticator = "externalbrowser"   # or "username_password_mfa", or omit for password
+authenticator = "externalbrowser"   # or "oauth_authorization_code", "username_password_mfa", or omit for password
 ```
 
-The connection name is **not** stored in `secrets.toml` — it only selects a section of `connections.toml`.
+> **Note on browser sign-in (OAuth / externalbrowser):** For local runs the app opens the connector connection with the credential cache **disabled** (`client_store_temporary_credential=False`). This means it does **not** read or write the macOS keychain / OS token cache, so you won't hit a keychain-unlock prompt — instead you get a fresh **browser sign-in each time the app starts and on Reconnect**. If your session token expires mid-run, the in-app **Reconnect** button re-runs that browser sign-in without restarting the app. (Password and key-pair auth are unaffected and never prompt a browser.)
 
 ### 3. Run
 

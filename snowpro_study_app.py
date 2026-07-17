@@ -5,7 +5,6 @@ import json
 import os
 import re
 from datetime import datetime
-import streamlit.components.v1 as components
 
 PROGRESS_FILE = os.path.join(os.path.dirname(__file__), "progress.json")
 QUESTIONS_CACHE_FILE = os.path.join(os.path.dirname(__file__), "questions_cache.json")
@@ -97,16 +96,33 @@ def log_error(message: str):
 
 
 _LAST_CONN_ERROR = ""   # most recent reason get_snowflake_connection() failed
+APP_BUILD = "2026-07-17e-native-timer"  # bump on each change; shown in reconnect
+                                       # banners to confirm the running code is current
+                                       # (a browser refresh does NOT reload Python code)
+
+
+def _has_st_secrets_snowflake() -> bool:
+    """True if a [connections.snowflake] block exists in Streamlit secrets
+    (.streamlit/secrets.toml locally). Used to prefer an explicit secrets file
+    over the connector default connection."""
+    try:
+        return "snowflake" in st.secrets.get("connections", {})
+    except Exception:
+        return False
 
 
 @st.cache_resource
 def get_snowflake_connection():
     """
-    Connection priority:
-    1. Streamlit native — works in SiS and with .streamlit/secrets.toml.
-    2. Named/default connection in ~/.snowflake/connections.toml (developer fallback).
-       Set the SNOWFLAKE_CONNECTION_NAME env var to select a specific named
-       connection; if unset, the connector's default connection is used.
+    Connection priority (first match wins):
+    1. SNOWFLAKE_CONNECTION_NAME env var (explicit named connection).
+    2. .streamlit/secrets.toml [connections.snowflake] — an explicit, app-scoped
+       choice, so it is preferred over the connector default when present.
+    3. Connector default connection (default_connection_name in config.toml) —
+       the normal local path. Resolved BY NAME and opened with the keychain cache
+       OFF so it always does a fresh browser OAuth (no macOS keychain prompt).
+    4. Streamlit-native st.connection — last resort; also the Streamlit in
+       Snowflake (SiS) path, where the connector paths above fail and fall here.
     After connecting, ensures an active warehouse is set (required for Cortex calls).
     The most recent failure reason is stashed in _LAST_CONN_ERROR so the UI can
     surface WHY a connection couldn't be made.
@@ -114,20 +130,28 @@ def get_snowflake_connection():
     global _LAST_CONN_ERROR
     conn = None
 
+    # OAuth authorization-code: disable the connector's credential cache so it
+    # never reads/writes the macOS keychain (no keychain prompt). With no cached
+    # token, connect() always runs a fresh browser OAuth sign-in — the user's
+    # preferred, reliable path. Applies to both connector-opened paths below.
+    _oauth_kwargs = {"client_store_temporary_credential": False}
+
     # 1. An explicitly-set SNOWFLAKE_CONNECTION_NAME wins — it is the user's
-    #    deliberate choice and must override any default or secrets.toml.
+    #    deliberate choice and must override any default.
     conn_name = os.environ.get("SNOWFLAKE_CONNECTION_NAME")
     if conn_name:
         try:
             import snowflake.connector
-            conn = snowflake.connector.connect(connection_name=conn_name)
+            conn = snowflake.connector.connect(connection_name=conn_name, **_oauth_kwargs)
             _LAST_CONN_ERROR = ""
         except Exception as e:
             _LAST_CONN_ERROR = f"connect(connection_name={conn_name!r}) failed: {e}"
 
-    # 2. Streamlit-native — used in Streamlit in Snowflake (SiS) and when a
-    #    .streamlit/secrets.toml [connections.snowflake] block is present.
-    if conn is None:
+    # 2. An explicit Streamlit secrets file wins over the connector default: it is
+    #    a deliberate, app-scoped choice (and usually carries inline credentials,
+    #    so it sidesteps the keychain entirely). Only used when a
+    #    [connections.snowflake] secret is actually present.
+    if conn is None and _has_st_secrets_snowflake():
         try:
             conn = st.connection("snowflake")._instance
             if conn is not None:
@@ -135,15 +159,40 @@ def get_snowflake_connection():
         except Exception as e:
             _LAST_CONN_ERROR = f"st.connection('snowflake'): {e}"
 
-    # 3. Connector's default connection (default_connection_name in config.toml).
+    # 3. Connector's default connection. IMPORTANT: on the anonymous default path
+    #    (connect() with no connection_name) the connector IGNORES kwarg overrides,
+    #    so client_store_temporary_credential=False would NOT take effect and the
+    #    macOS keychain cache would stay on. Resolve the default connection NAME
+    #    and pass it via connection_name= so the keychain-off override is honored.
+    #    In SiS this resolves to nothing / raises, and we fall through to #3.
     if conn is None:
         try:
             import snowflake.connector
-            conn = snowflake.connector.connect()
+            default_name = os.environ.get("SNOWFLAKE_DEFAULT_CONNECTION_NAME")
+            if not default_name:
+                try:
+                    from snowflake.connector.config_manager import CONFIG_MANAGER
+                    default_name = CONFIG_MANAGER["default_connection_name"]
+                except Exception:
+                    default_name = None
+            if default_name:
+                conn = snowflake.connector.connect(connection_name=default_name, **_oauth_kwargs)
+            else:
+                conn = snowflake.connector.connect(**_oauth_kwargs)
             _LAST_CONN_ERROR = ""
         except Exception as e:
             _LAST_CONN_ERROR = ("no SNOWFLAKE_CONNECTION_NAME set and the default "
                                 f"connection could not be opened: {e}")
+
+    # 4. Streamlit-native — last resort; also the Streamlit in Snowflake (SiS)
+    #    path (active session), reached when the connector paths above fail.
+    if conn is None:
+        try:
+            conn = st.connection("snowflake")._instance
+            if conn is not None:
+                _LAST_CONN_ERROR = ""
+        except Exception as e:
+            _LAST_CONN_ERROR = f"st.connection('snowflake'): {e}"
 
     if conn is None:
         return None
@@ -596,6 +645,24 @@ def _check_connection() -> tuple:
         return True, ""
     except Exception as e:
         return False, str(e)
+
+
+def _force_reconnect() -> tuple:
+    """Force a fresh Snowflake sign-in.
+
+    Credential caching is disabled (client_store_temporary_credential=False), so
+    there is no cached keychain token to bypass or clear. Evicting the
+    process-cached connection and reconnecting is enough: the next connect()
+    runs a fresh browser OAuth flow. Returns (ok: bool, error_msg: str).
+
+    Also resets the Streamlit-native connection (SiS fallback path), which keeps
+    its own cache that get_snowflake_connection.clear() does not touch."""
+    try:
+        st.connection("snowflake").reset()
+    except Exception:
+        pass
+    get_snowflake_connection.clear()
+    return _check_connection()
 
 
 def _verify_question_threadsafe(question: dict, prefetched: dict) -> tuple:
@@ -1120,22 +1187,22 @@ def show_connection_warning_if_needed():
             "Check your VPN or re-authenticate (`snow connection test`), then reconnect.",
             icon="⚠️"
         )
+        st.caption(f"build {APP_BUILD}")
         c1, _ = st.columns([1, 2])
         with c1:
             if st.button("🔁 Reconnect to Snowflake", key="conn_warn_reconnect",
                          type="primary", use_container_width=True):
-                # The cache_resource entry is holding a stale None; clear it and
-                # force a fresh connect (re-auth) right here so the user can stay
-                # on the current page instead of leaving to the pre-load screen.
-                get_snowflake_connection.clear()
-                with st.spinner("Reconnecting to Snowflake…"):
-                    ok, err = _check_connection()
+                # Credential caching is off, so this evicts the cached connection
+                # and opens a fresh browser OAuth sign-in — the user can stay on
+                # the current page instead of leaving to the pre-load screen.
+                with st.spinner("Reconnecting to Snowflake… a browser window may open so you can sign in again."):
+                    ok, err = _force_reconnect()
                 if ok:
                     st.rerun()
                 else:
-                    st.error(f"Still can't reach Snowflake: {err or 'no connection configured'}. "
-                             "Check VPN / auth, or confirm a Snowflake connection is configured "
-                             "(SNOWFLAKE_CONNECTION_NAME or a default connection).")
+                    st.error(f"Still can't reach Snowflake: {err or 'no connection configured'} · build {APP_BUILD}. "
+                             "Check VPN / auth, or re-auth in a terminal "
+                             "(`snow connection test`), then Reconnect.")
         return True
     return False
 
@@ -1755,21 +1822,23 @@ def render_preload():
             "wouldn't keep failing. Click **Reconnect**, then use **Generate Missing "
             "Questions** to continue where it left off — already-cached questions are kept."
         )
-        st.caption(f"Details: {st.session_state.bulk_critical_error}")
+        st.caption(f"Details: {st.session_state.bulk_critical_error} · build {APP_BUILD}")
         bc1, bc2, _ = st.columns([1, 1, 3])
         with bc1:
             if st.button("🔁 Reconnect to Snowflake", type="primary", use_container_width=True):
-                # Evict the stale cached connection, then immediately establish a
-                # fresh one so re-authentication (e.g. externalbrowser) happens NOW,
-                # on button press — not lazily on the next Cortex call. Verify the
-                # new session before clearing the banner.
-                get_snowflake_connection.clear()
-                with st.spinner("Reconnecting to Snowflake…"):
-                    ok, err = _check_connection()
+                # Credential caching is off, so reconnecting just evicts the
+                # process-cached connection and opens a fresh browser OAuth
+                # sign-in — recovery happens NOW, on button press. Verify the new
+                # session before clearing the banner.
+                with st.spinner("Reconnecting to Snowflake… a browser window may open so you can sign in again."):
+                    ok, err = _force_reconnect()
                 if ok:
                     st.session_state.bulk_critical_error = None
                 else:
-                    st.session_state.bulk_critical_error = f"Reconnect failed: {err}"
+                    st.session_state.bulk_critical_error = (
+                        f"Reconnect failed: {err} · build {APP_BUILD}. If this persists, "
+                        "re-auth in a terminal: `snow connection test`, then Reconnect."
+                    )
                 st.rerun()
         with bc2:
             if st.button("Dismiss", use_container_width=True):
@@ -2333,6 +2402,32 @@ def render_exam_setup():
         st.rerun()
 
 
+@st.fragment(run_every=1)
+def render_exam_timer():
+    """Native server-side countdown. Reruns every second on its own (no iframe,
+    no JS, no deprecated components.html). On expiry it submits the exam directly
+    in Python and forces a full-app rerun to show results."""
+    start = st.session_state.get("exam_start_time")
+    limit = st.session_state.get("exam_time_limit")
+    if not start or not limit:
+        return
+    remaining = max(0, limit - (time.time() - start))
+    if remaining <= 0:
+        if not st.session_state.exam_submitted:
+            st.session_state.exam_submitted = True
+            record_exam_results()
+        st.rerun(scope="app")
+        return
+    m, s = divmod(int(remaining), 60)
+    color = "#dc3545" if remaining < 300 else "#29B5E8"
+    st.markdown(
+        f"<div style='font-size:2rem;font-weight:700;text-align:center;"
+        f"color:{color};font-family:Inter,sans-serif;padding:0.25rem 0;'>"
+        f"⏱️ {m:02d}:{s:02d}</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def render_exam():
     st.markdown(get_snowflake_css(), unsafe_allow_html=True)
     show_connection_warning_if_needed()
@@ -2349,40 +2444,7 @@ def render_exam():
         st.progress(answered / total, text=f"Question {st.session_state.exam_current_q + 1} of {total} ({answered} answered)")
     with top_cols[1]:
         if st.session_state.exam_start_time and st.session_state.exam_time_limit:
-            elapsed = time.time() - st.session_state.exam_start_time
-            remaining = max(0, st.session_state.exam_time_limit - elapsed)
-            total_secs = int(remaining)
-            color = "#dc3545" if remaining < 300 else "#29B5E8"
-            components.html(f"""
-            <div id="timer" style="font-size:2rem;font-weight:700;text-align:center;color:{color};font-family:Inter,sans-serif;padding:0.25rem 0;"></div>
-            <script>
-                var total = {total_secs};
-                var timerEl = document.getElementById('timer');
-                function fmt(t) {{
-                    var m = Math.floor(t / 60), s = t % 60;
-                    return '⏱️ ' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
-                }}
-                timerEl.textContent = fmt(total);
-                var iv = setInterval(function() {{
-                    total -= 1;
-                    if (total < 0) total = 0;
-                    timerEl.textContent = fmt(total);
-                    if (total < 300) timerEl.style.color = '#dc3545';
-                    if (total <= 0) {{
-                        clearInterval(iv);
-                        try {{
-                            var btns = window.parent.document.querySelectorAll('button');
-                            btns.forEach(function(b) {{
-                                if (b.textContent.trim() === 'Submit Exam') b.click();
-                            }});
-                        }} catch(e) {{}}
-                    }}
-                }}, 1000);
-            </script>
-            """, height=50)
-            if remaining <= 0:
-                st.session_state.exam_submitted = True
-                st.rerun()
+            render_exam_timer()
     with top_cols[2]:
         if st.button("Submit Exam", type="primary"):
             st.session_state.exam_submitted = True
