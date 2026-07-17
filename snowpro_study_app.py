@@ -1400,6 +1400,33 @@ def get_snowflake_css():
             color: #f0a8b0;
         }
 
+        /* ---- Exam-history "Review / Hide" toggle buttons (keys: review_exam_<n>) ----
+           Caret is drawn as a larger, left-anchored ::before so the label text stays
+           centered. Collapsed = ▶ (secondary), expanded = ▼ (primary). */
+        [class*="st-key-review_exam_"] button {
+            position: relative;
+        }
+        [class*="st-key-review_exam_"] button::before {
+            position: absolute;
+            left: 0.85rem;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 1.15rem;
+            line-height: 1;
+            opacity: 0.9;
+        }
+        [class*="st-key-review_exam_"] button[kind="secondary"]::before { content: "\u25B6"; }
+        [class*="st-key-review_exam_"] button[kind="primary"]::before   { content: "\u25BC"; }
+        /* Softer active (expanded) fill than Streamlit's default bold red */
+        [class*="st-key-review_exam_"] button[kind="primary"] {
+            background-color: #B5555E;
+            border-color: #B5555E;
+        }
+        [class*="st-key-review_exam_"] button[kind="primary"]:hover {
+            background-color: #9E4A52;
+            border-color: #9E4A52;
+        }
+
         .explanation-box {
             background: rgba(41, 181, 232, 0.12);
             border-left: 4px solid #29B5E8;
@@ -2993,15 +3020,20 @@ def render_progress():
             with c1:
                 st.write(f"**Exam {attempt_num}** — {exam['date']} — Score: **{exam['score']}/1000** — {exam['correct']}/{exam['questions']} correct — {status}")
             details = exam.get("details")
+            is_open = st.session_state.get("review_exam_idx") == attempt_num
             with c2:
                 if details:
-                    if st.button("Review", key=f"review_exam_{attempt_num}", use_container_width=True):
-                        st.session_state.review_exam_idx = (
-                            None if st.session_state.get("review_exam_idx") == attempt_num else attempt_num
-                        )
+                    if st.button(
+                        "Hide" if is_open else "Review",
+                        key=f"review_exam_{attempt_num}",
+                        use_container_width=True,
+                        type="primary" if is_open else "secondary",
+                        help="Collapse this attempt" if is_open else "Review this attempt's questions",
+                    ):
+                        st.session_state.review_exam_idx = None if is_open else attempt_num
                         st.rerun()
 
-            if details and st.session_state.get("review_exam_idx") == attempt_num:
+            if details and is_open:
                 with st.container(border=True):
                     st.caption(f"Reviewing Exam {attempt_num} — {exam['date']}")
                     flt = st.radio(
