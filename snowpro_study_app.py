@@ -2263,7 +2263,7 @@ def render_exam_setup():
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        num_q = st.selectbox("Number of questions", [10, 25, 50, 100], index=3)
+        num_q = st.selectbox("Number of questions", [10, 25, 50, 100, 150], index=3)
     with col2:
         timed = st.selectbox("Timer", ["Timed (115 min)", "Timed (55 min)", "No timer"])
     with col3:
@@ -2473,12 +2473,30 @@ def record_exam_results():
     score = int((correct / total) * 1000) if total > 0 else 0
     passed = score >= 750
 
+    details = []
+    for idx, q in enumerate(resolved):
+        if q is None:
+            continue
+        ua = sorted(answers.get(idx, []))
+        ca = sorted(q["answer"])
+        details.append({
+            "question": q["question"],
+            "options": q["options"],
+            "answer": ca,
+            "user_answer": ua,
+            "is_correct": ua == ca,
+            "domain": q["domain"],
+            "explanation": q.get("explanation", ""),
+            "citations": q.get("citations", []),
+        })
+
     st.session_state.exam_history.append({
         "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "questions": total,
         "correct": correct,
         "score": score,
         "passed": passed,
+        "details": details,
     })
 
     for idx, q in enumerate(resolved):
@@ -2493,6 +2511,31 @@ def record_exam_results():
             st.session_state.domain_stats_exam[d]["correct"] += 1
 
     save_progress()
+
+
+def render_question_review(display_num, q, user_answer, correct_answer):
+    """Render a single question in an expander showing the user's answer vs. the
+    correct answer plus explanation. Reused by exam results and exam-history review.
+    Not nested inside another expander (Streamlit forbids nesting)."""
+    ua = sorted(user_answer)
+    ca = sorted(correct_answer)
+    is_correct = ua == ca
+    icon = "✅" if is_correct else "❌"
+    color = "green" if is_correct else "red"
+    with st.expander(f":{color}[{icon}] Q{display_num}: {md_safe(q['question'][:80])}..."):
+        st.write(f"**{md_safe(q['question'])}**")
+        for i, opt in enumerate(q["options"]):
+            is_user = i in ua
+            is_ans = i in ca
+            if is_ans and is_user:
+                st.markdown(f'<div class="correct-answer">✅ {md_safe(opt)}</div>', unsafe_allow_html=True)
+            elif is_ans and not is_user:
+                st.markdown(f'<div class="correct-answer">✅ {md_safe(opt)} (correct answer)</div>', unsafe_allow_html=True)
+            elif is_user and not is_ans:
+                st.markdown(f'<div class="wrong-answer">❌ {md_safe(opt)} (your answer)</div>', unsafe_allow_html=True)
+            else:
+                st.write(f"&nbsp;&nbsp;&nbsp;&nbsp;{md_safe(opt)}")
+        render_explanation_box(q.get("explanation", ""), q.get("citations", []))
 
 
 def render_exam_results():
@@ -2566,23 +2609,7 @@ def render_exam_results():
         if show_filter == "Correct Only" and not is_correct:
             continue
 
-        icon = "✅" if is_correct else "❌"
-        color = "green" if is_correct else "red"
-
-        with st.expander(f":{color}[{icon}] Q{idx + 1}: {md_safe(q['question'][:80])}..."):
-            st.write(f"**{md_safe(q['question'])}**")
-            for i, opt in enumerate(q["options"]):
-                is_user = i in user_answer
-                is_ans = i in correct_answer
-                if is_ans and is_user:
-                    st.markdown(f'<div class="correct-answer">✅ {md_safe(opt)}</div>', unsafe_allow_html=True)
-                elif is_ans and not is_user:
-                    st.markdown(f'<div class="correct-answer">✅ {md_safe(opt)} (correct answer)</div>', unsafe_allow_html=True)
-                elif is_user and not is_ans:
-                    st.markdown(f'<div class="wrong-answer">❌ {md_safe(opt)} (your answer)</div>', unsafe_allow_html=True)
-                else:
-                    st.write(f"&nbsp;&nbsp;&nbsp;&nbsp;{md_safe(opt)}")
-            render_explanation_box(q["explanation"], q.get("citations", []))
+        render_question_review(idx + 1, q, user_answer, correct_answer)
 
     st.write("")
     col1, col2 = st.columns(2)
@@ -2958,9 +2985,42 @@ def render_progress():
     if st.session_state.exam_history:
         st.write("")
         st.subheader("Exam History")
+        n = len(st.session_state.exam_history)
         for i, exam in enumerate(reversed(st.session_state.exam_history)):
+            attempt_num = n - i
             status = "✅ PASSED" if exam["passed"] else "❌ NOT PASSING"
-            st.write(f"**Exam {len(st.session_state.exam_history) - i}** — {exam['date']} — Score: **{exam['score']}/1000** — {exam['correct']}/{exam['questions']} correct — {status}")
+            c1, c2 = st.columns([4, 1])
+            with c1:
+                st.write(f"**Exam {attempt_num}** — {exam['date']} — Score: **{exam['score']}/1000** — {exam['correct']}/{exam['questions']} correct — {status}")
+            details = exam.get("details")
+            with c2:
+                if details:
+                    if st.button("Review", key=f"review_exam_{attempt_num}", use_container_width=True):
+                        st.session_state.review_exam_idx = (
+                            None if st.session_state.get("review_exam_idx") == attempt_num else attempt_num
+                        )
+                        st.rerun()
+
+            if details and st.session_state.get("review_exam_idx") == attempt_num:
+                with st.container(border=True):
+                    st.caption(f"Reviewing Exam {attempt_num} — {exam['date']}")
+                    flt = st.radio(
+                        "Filter", ["All", "Incorrect Only", "Correct Only"],
+                        index=0, horizontal=True, key=f"review_filter_{attempt_num}",
+                    )
+                    shown = 0
+                    for qi, d in enumerate(details):
+                        if flt == "Incorrect Only" and d["is_correct"]:
+                            continue
+                        if flt == "Correct Only" and not d["is_correct"]:
+                            continue
+                        shown += 1
+                        render_question_review(qi + 1, d, d["user_answer"], d["answer"])
+                    if shown == 0:
+                        st.info("No questions match this filter.")
+            elif not details:
+                st.caption("↳ Question-level detail wasn't recorded for this attempt.")
+
 
     # --- Reset Controls ---
     st.write("")
@@ -2986,6 +3046,7 @@ def render_progress():
             exam_total = sum(v["total"] for v in st.session_state.domain_stats_exam.values())
             st.session_state.domain_stats_exam = {d: {"correct": 0, "total": 0} for d in DOMAINS}
             st.session_state.exam_history = []
+            st.session_state.review_exam_idx = None
             st.session_state.total_questions_answered = max(0, st.session_state.total_questions_answered - exam_total)
             st.session_state.total_correct = max(0, st.session_state.total_correct - exam_total)
             save_progress()
@@ -3016,6 +3077,7 @@ def render_progress():
         st.session_state.domain_stats_study = {d: {"correct": 0, "total": 0} for d in DOMAINS}
         st.session_state.domain_stats_exam = {d: {"correct": 0, "total": 0} for d in DOMAINS}
         st.session_state.exam_history = []
+        st.session_state.review_exam_idx = None
         st.session_state.generated_questions = {}
         if os.path.exists(PROGRESS_FILE):
             os.remove(PROGRESS_FILE)
