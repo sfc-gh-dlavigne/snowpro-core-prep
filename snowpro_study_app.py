@@ -5,6 +5,7 @@ import json
 import os
 import re
 from datetime import datetime
+from question_utils import normalize_question
 
 PROGRESS_FILE = os.path.join(os.path.dirname(__file__), "progress.json")
 QUESTIONS_CACHE_FILE = os.path.join(os.path.dirname(__file__), "questions_cache.json")
@@ -840,7 +841,8 @@ Domain: {domain_name}
 Requirements:
 - Choose EITHER single-select (1 correct answer) OR multi-select (2-3 correct answers)
 - Single-select: exactly 4 options; multi-select: 4-5 options; question must say "Select all that apply"
-- IMPORTANT: Do NOT default to index 0 as the correct answer. Vary the correct answer position across options (0, 1, 2, or 3).
+- IMPORTANT: Do NOT default to index 0 as the correct answer, and do NOT list the correct option(s) first. Distribute correct answers across all positions (0, 1, 2, 3...); for multi-select, scatter the correct choices rather than grouping them at the top.
+- In the explanation, refer to answer choices by their CONTENT (e.g. "the Enterprise Edition option"), NOT by letter or position ("Option A", "the first choice") — option order is randomized after generation, so letter references become wrong.
 - Distractors must represent specific, realistic Snowflake misconceptions — e.g. confusing which Edition requires a feature, mixing up similar feature names, or citing a value that is off by one category. Avoid generic or obviously silly wrong answers.
 - Vary style: definitional, scenario-based, or elimination ("which is NOT...")
 - Explanation must say why each correct answer is right AND why each wrong answer is wrong
@@ -923,9 +925,9 @@ Generate exactly ONE exam question for EACH of the {n} concepts listed below. Re
 
 Requirements for EACH question:
 - Single-select (exactly 4 options) OR multi-select (4-5 options, question must say "Select all that apply")
-- IMPORTANT: Vary which option index is the correct answer. Do NOT consistently use index 0. Distribute correct answers across all four positions (0, 1, 2, 3) across the questions you generate.
+- IMPORTANT: Vary which option index is the correct answer and do NOT list correct option(s) first. Distribute correct answers across all positions (0, 1, 2, 3) across the questions; for multi-select, scatter the correct choices rather than grouping them at the top.
 - Distractors must represent specific, realistic Snowflake misconceptions — e.g. confusing which Edition requires a feature, mixing up similar feature names (Snowpipe vs Snowpipe Streaming), or citing a value that is off by one category (90 days vs 1 day). Avoid generic or obviously silly wrong answers.
-- Explanation says why each correct/wrong answer is correct/wrong, referencing the specific documented fact
+- Explanation says why each correct/wrong answer is correct/wrong, referencing the specific documented fact. Refer to choices by their CONTENT, NOT by letter or position ("Option A", "the first choice") — option order is randomized after generation.
 - Include 1-2 citations to REAL Snowflake documentation pages. Prefer these URL patterns: docs.snowflake.com/en/user-guide/[feature], docs.snowflake.com/en/sql-reference/[command], docs.snowflake.com/en/release-notes. Avoid community articles, old Classic Console paths, or version-specific release note entries.
 - CITATION-CLAIM ALIGNMENT (critical): Your correct answer and explanation must assert ONLY facts that the specific page you cite EXPLICITLY states. Do NOT rely on general knowledge or facts documented only on other pages. If you cannot cite a page that explicitly contains a specific detail (an exact number, edition, or behavior), either cite the precise page that does state it, or rewrite the correct answer to assert only what your cited page actually says. A merely topically-related citation is NOT sufficient — the verifier fetches your cited page and rejects any claim it does not explicitly support.
 - CRITICAL: The question text must be self-contained. Every condition needed to reach the correct answer must appear explicitly in the question itself — not only in the answer choices.
@@ -1255,6 +1257,7 @@ def get_or_generate_question(concept_idx: int, variation: int = 0):
         if passed:
             q["domain"] = concept_entry["domain"]
             q["id"] = concept_idx
+            q = normalize_question(q)
             cache[cache_key] = q
             save_questions_cache()
             if "failed_q_texts" in st.session_state:
@@ -2134,6 +2137,7 @@ def render_preload():
                         item, q = future_to_pair[fut]
                         q["domain"] = CONCEPT_BANK[item["concept_idx"]]["domain"]
                         q["id"]     = item["concept_idx"]
+                        q = normalize_question(q)
                         cache[(item["concept_idx"], item["variation"])] = q
                         _render_cache_status()   # live count refresh mid-flight
                     phase_status.progress(
