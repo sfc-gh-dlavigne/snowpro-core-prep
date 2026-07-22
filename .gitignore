@@ -10,6 +10,12 @@ progress.json
 preload_timing.log
 .snowflake/
 
+# Generated question bank — regenerated at runtime; commit deliberately with
+# `git add -f questions_cache.json` only when a data change must be published
+# (e.g. the option-shuffle migration). The .bak is a local safety copy.
+questions_cache.json
+questions_cache.json.bak
+
 # Local secrets — never commit real credentials (only the .example files are tracked)
 .streamlit/secrets.toml
 secrets.toml
