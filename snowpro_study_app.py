@@ -97,7 +97,7 @@ def log_error(message: str):
 
 
 _LAST_CONN_ERROR = ""   # most recent reason get_snowflake_connection() failed
-APP_BUILD = "2026-07-17e-native-timer"  # bump on each change; shown in reconnect
+APP_BUILD = "2026-07-17f-challenge-reconnect"  # bump on each change; shown in reconnect
                                        # banners to confirm the running code is current
                                        # (a browser refresh does NOT reload Python code)
 
@@ -371,27 +371,39 @@ PARALLEL_GEN_BATCHES = 4        # number of generation batches to fire in parall
 
 
 def _call_cortex(prompt: str):
-    """Execute a CORTEX.COMPLETE call. Returns raw string or None on failure."""
-    conn = get_snowflake_connection()
-    if conn is None:
-        return None
-    try:
-        cur = conn.cursor()
-        # Embed a uniqueness token directly in the PROMPT (not a SQL comment —
-        # Snowflake normalizes comments out of the result-cache key, and a
-        # session-level USE_CACHED_RESULT toggle is skipped when the cached
-        # connection is reused across reruns). Changing the prompt text is the
-        # one thing guaranteed to force a cache miss so the model re-runs. The
-        # model ignores this trailing line.
-        prompt = f"{prompt}\n\n[request id, ignore: {time.time_ns():x}{random.getrandbits(32):08x}]"
-        escaped = prompt.replace("\\", "\\\\").replace("'", "''")
-        cur.execute(
-            f"SELECT SNOWFLAKE.CORTEX.COMPLETE('{GEN_MODEL}', '{escaped}')"
-        )
-        return cur.fetchone()[0]
-    except Exception as e:
-        log_error(f"Cortex call failed: {e}")
-        return None
+    """Execute a CORTEX.COMPLETE call. Returns raw string or None on failure.
+
+    On an expired token / dead session (390114 etc.), forces a fresh sign-in
+    (browser OAuth) and retries once, so callers on the main thread — like the
+    challenge adjudicator — self-heal the same way the generation path does."""
+    # Embed a uniqueness token directly in the PROMPT (not a SQL comment —
+    # Snowflake normalizes comments out of the result-cache key, and a
+    # session-level USE_CACHED_RESULT toggle is skipped when the cached
+    # connection is reused across reruns). Changing the prompt text is the
+    # one thing guaranteed to force a cache miss so the model re-runs. The
+    # model ignores this trailing line.
+    prompt = f"{prompt}\n\n[request id, ignore: {time.time_ns():x}{random.getrandbits(32):08x}]"
+    for attempt in (1, 2):
+        conn = get_snowflake_connection()
+        if conn is None:
+            if attempt == 1:
+                _force_reconnect()   # no live connection — try a fresh sign-in, then retry
+                continue
+            return None
+        try:
+            cur = conn.cursor()
+            escaped = prompt.replace("\\", "\\\\").replace("'", "''")
+            cur.execute(
+                f"SELECT SNOWFLAKE.CORTEX.COMPLETE('{GEN_MODEL}', '{escaped}')"
+            )
+            return cur.fetchone()[0]
+        except Exception as e:
+            if attempt == 1 and _is_critical_error(str(e)):
+                _force_reconnect()   # expired token/session — reconnect and retry once
+                continue
+            log_error(f"Cortex call failed: {e}")
+            return None
+    return None
 
 
 def _adjudicate_challenge(q: dict, user_answer: list, user_argument: str) -> dict:
