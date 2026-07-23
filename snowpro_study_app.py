@@ -477,16 +477,28 @@ Return ONLY valid JSON with no markdown fences:
     return result
 
 
-def _render_challenge_box(cache_key, d_id, q, user_answer):
-    """Let the user dispute a question's answer key. Cortex adjudicates against
-    the cited docs; if upheld, the cached question is corrected (persisted) and
-    the score amended once. Shown in the study answer-reveal view."""
+def render_challenge_ui(unique_key, q, user_answer, *, cache_key=None,
+                        on_upheld=None, require_cache=False, use_expander=True):
+    """Reusable 'challenge the answer' widget. Cortex adjudicates the user's
+    argument against the question's cited docs. If upheld:
+      - the live cache entry (when cache_key maps to one) is corrected + persisted;
+      - on_upheld(old_answer, corrected_answer, corrected_explanation, reasoning)
+        is invoked so the caller can amend the appropriate score/state.
+
+    unique_key   namespaces widget keys and the stored verdict.
+    cache_key    (concept_idx, variation) to correct the shared cache, or None.
+    require_cache when True, an upheld verdict that cannot be persisted to the
+                  cache is downgraded to an error and on_upheld is NOT called
+                  (study/results, which are cache-backed). When False, on_upheld
+                  still fires so snapshots (exam history) can be rescored.
+    use_expander  True -> trigger lives in an expander (standalone views);
+                  False -> render inline (inside another expander, e.g. review).
+    """
     results = st.session_state.setdefault("challenge_result", {})
-    amended = st.session_state.setdefault("score_amended", set())
-    ck = f"{cache_key[0]}:{cache_key[1]}"
+    uk = unique_key
 
     # Show the prior verdict for this question (persists across the post-submit rerun).
-    prior = results.get(ck)
+    prior = results.get(uk)
     if prior:
         if prior.get("status") == "error":
             st.warning(prior["message"], icon="⚠️")
@@ -499,56 +511,84 @@ def _render_challenge_box(cache_key, d_id, q, user_answer):
             if prior.get("reasoning"):
                 st.caption(prior["reasoning"])
 
-    with st.expander("🚩 Think this is wrong? Challenge it"):
+    def _body():
         st.caption(
             "Explain why you believe the marked answer is incorrect. An adjudicator will "
             "check your argument against this question's cited Snowflake documentation. If it's "
             "substantiated, the question is corrected and your score is updated."
         )
-        arg = st.text_area("Your argument", key=f"challenge_arg_{ck}",
+        arg = st.text_area("Your argument", key=f"challenge_arg_{uk}",
                            placeholder="e.g. Per the Resource Monitors doc, the credit quota "
                                        "accounts for both warehouse and cloud services credits in "
                                        "the same threshold, so that option should be correct.")
-        if st.button("Submit challenge", key=f"challenge_submit_{ck}"):
+        if st.button("Submit challenge", key=f"challenge_submit_{uk}"):
             if not arg.strip():
                 st.warning("Please enter your argument first.", icon="⚠️")
-            else:
-                with st.spinner("Adjudicating against the cited documentation…"):
-                    res = _adjudicate_challenge(q, user_answer, arg.strip())
+                return
+            with st.spinner("Adjudicating against the cited documentation…"):
+                res = _adjudicate_challenge(q, user_answer, arg.strip())
 
-                if res.get("status") == "ok" and res.get("verdict") == "upheld":
+            if res.get("status") == "ok" and res.get("verdict") == "upheld":
+                old_answer = list(q.get("answer", []))
+                corrected_answer = res["corrected_answer"]
+                corrected_expl = res["corrected_explanation"]
+
+                cache_corrected = False
+                if cache_key is not None:
                     entry = st.session_state.generated_questions.get(cache_key)
                     if entry is not None:
-                        old_answer = list(entry.get("answer", []))
-                        entry.setdefault("_original_answer", old_answer)
-                        entry["answer"] = res["corrected_answer"]
-                        entry["explanation"] = res["corrected_explanation"]
+                        entry.setdefault("_original_answer", list(entry.get("answer", [])))
+                        entry["answer"] = corrected_answer
+                        entry["explanation"] = corrected_expl
                         entry["_corrected"] = True
                         entry["_correction_note"] = res.get("reasoning", "")
                         save_questions_cache()
+                        cache_corrected = True
 
-                        # Amend the score at most once per question.
-                        if ck not in amended:
-                            was_correct = sorted(user_answer) == sorted(old_answer)
-                            now_correct = sorted(user_answer) == sorted(res["corrected_answer"])
-                            stats = st.session_state.domain_stats_study[d_id]
-                            if not was_correct and now_correct:
-                                st.session_state.total_correct += 1
-                                stats["correct"] += 1
-                                save_progress()
-                            elif was_correct and not now_correct:
-                                st.session_state.total_correct = max(0, st.session_state.total_correct - 1)
-                                stats["correct"] = max(0, stats["correct"] - 1)
-                                save_progress()
-                            amended.add(ck)
-                    else:
-                        # Question isn't in the live cache (e.g. offline fallback) — record the
-                        # verdict but don't attempt to persist a correction.
-                        res = {"status": "error",
-                               "message": "This question isn't in the editable cache, so it can't be auto-corrected."}
+                if require_cache and not cache_corrected:
+                    # Cache-backed view but the entry is gone (e.g. offline fallback):
+                    # record the verdict but don't touch any score.
+                    res = {"status": "error",
+                           "message": "This question isn't in the editable cache, so it can't be auto-corrected."}
+                elif on_upheld is not None:
+                    on_upheld(old_answer, corrected_answer, corrected_expl, res.get("reasoning", ""))
 
-                results[ck] = res
-                st.rerun()
+            results[uk] = res
+            st.rerun()
+
+    if use_expander:
+        with st.expander("🚩 Think this is wrong? Challenge it"):
+            _body()
+    else:
+        st.markdown("**🚩 Think this is wrong? Challenge it**")
+        with st.container(border=True):
+            _body()
+
+
+def _render_challenge_box(cache_key, d_id, q, user_answer):
+    """Study answer-reveal challenge (expander). Corrects the cached question and
+    amends the study score once if upheld."""
+    ck = f"{cache_key[0]}:{cache_key[1]}"
+    amended = st.session_state.setdefault("score_amended", set())
+
+    def _amend(old_answer, corrected_answer, corrected_expl, reasoning):
+        if ck in amended:
+            return
+        was_correct = sorted(user_answer) == sorted(old_answer)
+        now_correct = sorted(user_answer) == sorted(corrected_answer)
+        stats = st.session_state.domain_stats_study[d_id]
+        if not was_correct and now_correct:
+            st.session_state.total_correct += 1
+            stats["correct"] += 1
+            save_progress()
+        elif was_correct and not now_correct:
+            st.session_state.total_correct = max(0, st.session_state.total_correct - 1)
+            stats["correct"] = max(0, stats["correct"] - 1)
+            save_progress()
+        amended.add(ck)
+
+    render_challenge_ui(ck, q, user_answer, cache_key=cache_key,
+                        on_upheld=_amend, require_cache=True, use_expander=True)
 
 
 def _parse_json(raw: str):
@@ -2581,6 +2621,7 @@ def record_exam_results():
             "domain": q["domain"],
             "explanation": q.get("explanation", ""),
             "citations": q.get("citations", []),
+            "item": items[idx],  # (concept_idx, variation) -> lets review map back to cache
         })
 
     st.session_state.exam_history.append({
@@ -2606,10 +2647,51 @@ def record_exam_results():
     save_progress()
 
 
-def render_question_review(display_num, q, user_answer, correct_answer):
+def _rescore_attempt(attempt, q_index, corrected_answer, corrected_explanation=None):
+    """Apply an upheld challenge to a stored exam attempt: update that question's
+    stored answer/explanation and is_correct, recompute the attempt's
+    correct/score/passed, and adjust global exam stats (domain_stats_exam,
+    total_correct) by the correctness delta. Persists via save_progress().
+
+    Callers must guard against invoking this more than once per (attempt,
+    question) so the delta isn't applied repeatedly.
+    """
+    details = attempt.get("details") or []
+    if q_index < 0 or q_index >= len(details):
+        return
+    d = details[q_index]
+    ca = sorted(corrected_answer)
+    old_is_correct = bool(d.get("is_correct", False))
+    new_is_correct = sorted(d.get("user_answer", [])) == ca
+
+    d["answer"] = ca
+    if corrected_explanation is not None:
+        d["explanation"] = corrected_explanation
+    d["is_correct"] = new_is_correct
+
+    if new_is_correct != old_is_correct:
+        delta = 1 if new_is_correct else -1
+        attempt["correct"] = max(0, int(attempt.get("correct", 0)) + delta)
+        total = int(attempt.get("questions", 0)) or 1
+        attempt["score"] = int((attempt["correct"] / total) * 1000)
+        attempt["passed"] = attempt["score"] >= 750
+        dom = d.get("domain")
+        exam_stats = st.session_state.domain_stats_exam
+        if dom in exam_stats:
+            exam_stats[dom]["correct"] = max(0, exam_stats[dom]["correct"] + delta)
+        st.session_state.total_correct = max(0, st.session_state.total_correct + delta)
+
+    save_progress()
+
+
+def render_question_review(display_num, q, user_answer, correct_answer, *, challenge_ctx=None):
     """Render a single question in an expander showing the user's answer vs. the
     correct answer plus explanation. Reused by exam results and exam-history review.
-    Not nested inside another expander (Streamlit forbids nesting)."""
+    Not nested inside another expander (Streamlit forbids nesting).
+
+    challenge_ctx (optional): {"unique_key", "cache_key", "on_upheld", "require_cache"}
+    renders an inline challenge widget inside the expander when provided.
+    """
     ua = sorted(user_answer)
     ca = sorted(correct_answer)
     is_correct = ua == ca
@@ -2629,6 +2711,14 @@ def render_question_review(display_num, q, user_answer, correct_answer):
             else:
                 st.write(f"&nbsp;&nbsp;&nbsp;&nbsp;{md_safe(opt)}")
         render_explanation_box(q.get("explanation", ""), q.get("citations", []))
+        if challenge_ctx:
+            render_challenge_ui(
+                challenge_ctx["unique_key"], q, user_answer,
+                cache_key=challenge_ctx.get("cache_key"),
+                on_upheld=challenge_ctx.get("on_upheld"),
+                require_cache=challenge_ctx.get("require_cache", False),
+                use_expander=False,
+            )
 
 
 def render_exam_results():
@@ -2690,9 +2780,11 @@ def render_exam_results():
 
     show_filter = st.radio("Filter", ["All", "Incorrect Only", "Correct Only"], index=0, key="results_filter", horizontal=True)
 
+    detail_idx = -1
     for idx, q in enumerate(resolved):
         if q is None:
             continue
+        detail_idx += 1  # position within the stored attempt's (compacted) details
         user_answer = sorted(answers.get(idx, []))
         correct_answer = sorted(q["answer"])
         is_correct = user_answer == correct_answer
@@ -2702,7 +2794,20 @@ def render_exam_results():
         if show_filter == "Correct Only" and not is_correct:
             continue
 
-        render_question_review(idx + 1, q, user_answer, correct_answer)
+        uk = f"results_{idx}"
+
+        def _amend(old_answer, corrected_answer, corrected_expl, reasoning, di=detail_idx, uk=uk):
+            amended = st.session_state.setdefault("exam_score_amended", set())
+            if uk in amended:
+                return
+            hist = st.session_state.exam_history
+            if hist:
+                _rescore_attempt(hist[-1], di, corrected_answer, corrected_expl)
+            amended.add(uk)
+
+        ctx = {"unique_key": uk, "cache_key": items[idx],
+               "on_upheld": _amend, "require_cache": True}
+        render_question_review(detail_idx + 1, q, user_answer, correct_answer, challenge_ctx=ctx)
 
     st.write("")
     col1, col2 = st.columns(2)
@@ -3113,7 +3218,23 @@ def render_progress():
                         if flt == "Correct Only" and not d["is_correct"]:
                             continue
                         shown += 1
-                        render_question_review(qi + 1, d, d["user_answer"], d["answer"])
+
+                        uk = f"exam{attempt_num}_{qi}"
+
+                        def _amend(old_answer, corrected_answer, corrected_expl, reasoning,
+                                   attempt=exam, qidx=qi, uk=uk):
+                            amended = st.session_state.setdefault("exam_score_amended", set())
+                            if uk in amended:
+                                return
+                            _rescore_attempt(attempt, qidx, corrected_answer, corrected_expl)
+                            amended.add(uk)
+
+                        item = d.get("item")
+                        cache_key = tuple(item) if item else None
+                        ctx = {"unique_key": uk, "cache_key": cache_key,
+                               "on_upheld": _amend, "require_cache": False}
+                        render_question_review(qi + 1, d, d["user_answer"], d["answer"],
+                                               challenge_ctx=ctx)
                     if shown == 0:
                         st.info("No questions match this filter.")
             elif not details:
