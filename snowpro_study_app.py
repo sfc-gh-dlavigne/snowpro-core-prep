@@ -370,8 +370,11 @@ BULK_BATCH_SIZE     = 5         # concepts generated per Cortex call during pre-
 PARALLEL_GEN_BATCHES = 4        # number of generation batches to fire in parallel per rerun
 
 
-def _call_cortex(prompt: str):
+def _call_cortex(prompt: str, model: str = GEN_MODEL):
     """Execute a CORTEX.COMPLETE call. Returns raw string or None on failure.
+
+    Defaults to GEN_MODEL; pass model=VERIFY_MODEL for fact-check-style calls
+    (e.g. challenge adjudication).
 
     On an expired token / dead session (390114 etc.), forces a fresh sign-in
     (browser OAuth) and retries once, so callers on the main thread — like the
@@ -394,7 +397,7 @@ def _call_cortex(prompt: str):
             cur = conn.cursor()
             escaped = prompt.replace("\\", "\\\\").replace("'", "''")
             cur.execute(
-                f"SELECT SNOWFLAKE.CORTEX.COMPLETE('{GEN_MODEL}', '{escaped}')"
+                f"SELECT SNOWFLAKE.CORTEX.COMPLETE('{model}', '{escaped}')"
             )
             return cur.fetchone()[0]
         except Exception as e:
@@ -463,7 +466,7 @@ Return ONLY valid JSON with no markdown fences:
   "corrected_explanation": "<doc-grounded explanation of the correct answer>",
   "reasoning": "<one paragraph citing the specific documentation text that justifies your ruling>"}}"""
 
-    raw = _call_cortex(prompt)
+    raw = _call_cortex(prompt, model=VERIFY_MODEL)
     if raw is None:
         return {"status": "error",
                 "message": "Couldn't reach Cortex to evaluate the challenge. Check your connection and try again."}
