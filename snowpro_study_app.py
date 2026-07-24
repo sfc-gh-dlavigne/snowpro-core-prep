@@ -97,7 +97,7 @@ def log_error(message: str):
 
 
 _LAST_CONN_ERROR = ""   # most recent reason get_snowflake_connection() failed
-APP_BUILD = "2026-07-17f-challenge-reconnect"  # bump on each change; shown in reconnect
+APP_BUILD = "2026-07-17g-length-parity"  # bump on each change; shown in reconnect
                                        # banners to confirm the running code is current
                                        # (a browser refresh does NOT reload Python code)
 
@@ -896,6 +896,7 @@ Requirements:
 - IMPORTANT: Do NOT default to index 0 as the correct answer, and do NOT list the correct option(s) first. Distribute correct answers across all positions (0, 1, 2, 3...); for multi-select, scatter the correct choices rather than grouping them at the top.
 - In the explanation, refer to answer choices by their CONTENT (e.g. "the Enterprise Edition option"), NOT by letter or position ("Option A", "the first choice") — option order is randomized after generation, so letter references become wrong.
 - Distractors must represent specific, realistic Snowflake misconceptions — e.g. confusing which Edition requires a feature, mixing up similar feature names, or citing a value that is off by one category. Avoid generic or obviously silly wrong answers.
+- LENGTH PARITY: Write every distractor as a fully-articulated, plausible statement with the same specificity and length as the correct answer. The correct option must NOT be conspicuously longer or more qualified than the distractors — level the distractors UP to match it; never pad with filler or trim the correct answer's necessary precision.
 - Vary style: definitional, scenario-based, or elimination ("which is NOT...")
 - Explanation must say why each correct answer is right AND why each wrong answer is wrong
 - Include 1-2 citations to REAL Snowflake documentation pages. Prefer: docs.snowflake.com/en/user-guide/[feature], docs.snowflake.com/en/sql-reference/[command]. Avoid community articles or version-specific release notes.
@@ -979,6 +980,7 @@ Requirements for EACH question:
 - Single-select (exactly 4 options) OR multi-select (4-5 options, question must say "Select all that apply")
 - IMPORTANT: Vary which option index is the correct answer and do NOT list correct option(s) first. Distribute correct answers across all positions (0, 1, 2, 3) across the questions; for multi-select, scatter the correct choices rather than grouping them at the top.
 - Distractors must represent specific, realistic Snowflake misconceptions — e.g. confusing which Edition requires a feature, mixing up similar feature names (Snowpipe vs Snowpipe Streaming), or citing a value that is off by one category (90 days vs 1 day). Avoid generic or obviously silly wrong answers.
+- LENGTH PARITY: Write every distractor as a fully-articulated, plausible statement with the same specificity and length as the correct answer. The correct option must NOT be conspicuously longer or more qualified than the distractors — level the distractors UP to match it; never pad with filler or trim the correct answer's necessary precision.
 - Explanation says why each correct/wrong answer is correct/wrong, referencing the specific documented fact. Refer to choices by their CONTENT, NOT by letter or position ("Option A", "the first choice") — option order is randomized after generation.
 - Include 1-2 citations to REAL Snowflake documentation pages. Prefer these URL patterns: docs.snowflake.com/en/user-guide/[feature], docs.snowflake.com/en/sql-reference/[command], docs.snowflake.com/en/release-notes. Avoid community articles, old Classic Console paths, or version-specific release note entries.
 - CITATION-CLAIM ALIGNMENT (critical): Your correct answer and explanation must assert ONLY facts that the specific page you cite EXPLICITLY states. Do NOT rely on general knowledge or facts documented only on other pages. If you cannot cite a page that explicitly contains a specific detail (an exact number, edition, or behavior), either cite the precise page that does state it, or rewrite the correct answer to assert only what your cited page actually says. A merely topically-related citation is NOT sufficient — the verifier fetches your cited page and rejects any claim it does not explicitly support.
@@ -1063,9 +1065,10 @@ Generate exactly ONE exam question for EACH of the {n} concepts listed below. Re
 
 Requirements for EACH question:
 - Single-select (exactly 4 options) OR multi-select (4-5 options, question must say "Select all that apply")
-- IMPORTANT: Vary which option index is the correct answer. Do NOT consistently use index 0. Distribute correct answers across all four positions (0, 1, 2, 3) across the questions you generate.
+- IMPORTANT: Vary which option index is the correct answer and do NOT list correct option(s) first. Distribute correct answers across all positions (0, 1, 2, 3) across the questions; for multi-select, scatter the correct choices rather than grouping them at the top.
 - Distractors must represent specific, realistic Snowflake misconceptions — e.g. confusing which Edition requires a feature, mixing up similar feature names (Snowpipe vs Snowpipe Streaming), or citing a value that is off by one category (90 days vs 1 day). Avoid generic or obviously silly wrong answers.
-- Explanation says why each correct/wrong answer is correct/wrong, referencing the specific documented fact
+- LENGTH PARITY: Write every distractor as a fully-articulated, plausible statement with the same specificity and length as the correct answer. The correct option must NOT be conspicuously longer or more qualified than the distractors — level the distractors UP to match it; never pad with filler or trim the correct answer's necessary precision.
+- Explanation says why each correct/wrong answer is correct/wrong, referencing the specific documented fact. Refer to choices by their CONTENT, NOT by letter or position ("Option A", "the first choice") — option order is randomized after generation.
 - Include 1-2 citations to REAL Snowflake documentation pages. Prefer these URL patterns: docs.snowflake.com/en/user-guide/[feature], docs.snowflake.com/en/sql-reference/[command], docs.snowflake.com/en/release-notes. Avoid community articles, old Classic Console paths, or version-specific release note entries.
 - CITATION-CLAIM ALIGNMENT (critical): Your correct answer and explanation must assert ONLY facts that the specific page you cite EXPLICITLY states. Do NOT rely on general knowledge or facts documented only on other pages. If you cannot cite a page that explicitly contains a specific detail (an exact number, edition, or behavior), either cite the precise page that does state it, or rewrite the correct answer to assert only what your cited page actually says. A merely topically-related citation is NOT sufficient — the verifier fetches your cited page and rejects any claim it does not explicitly support.
 - CRITICAL: The question text must be self-contained. Every condition needed to reach the correct answer must appear explicitly in the question itself — not only in the answer choices.
