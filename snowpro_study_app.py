@@ -2016,38 +2016,22 @@ def render_preload():
     if not is_running:
         st.divider()
         st.write("**Reset & regenerate** — clears the question cache first, then generates everything fresh.")
-        rc1, rc2 = st.columns(2)
-        with rc1:
-            if st.button("↺ Reset & Regenerate Exam Questions", use_container_width=True,
-                         help="Clears all cached questions, then generates variation 0 for every concept"):
-                _preflight_or_abort()   # verify token BEFORE wiping the cache
-                st.session_state.generated_questions = {}
-                if os.path.exists(QUESTIONS_CACHE_FILE):
-                    os.remove(QUESTIONS_CACHE_FILE)
-                items = [
-                    {"concept_idx": i, "variation": 0, "attempts": 0, "feedback": "", "failure_type": "", "failed_texts": []}
-                    for i in range(total_concepts)
-                ]
-                st.session_state.bulk_items = items
-                st.session_state.bulk_total = len(items)
-                st.session_state.stop_bulk  = False
-                st.rerun()
-        with rc2:
-            if st.button("↺ Reset & Regenerate All Questions", use_container_width=True,
-                         help="Clears all cached questions, then generates all variations for every concept"):
-                _preflight_or_abort()   # verify token BEFORE wiping the cache
-                st.session_state.generated_questions = {}
-                if os.path.exists(QUESTIONS_CACHE_FILE):
-                    os.remove(QUESTIONS_CACHE_FILE)
-                items = [
-                    {"concept_idx": i, "variation": v, "attempts": 0, "feedback": "", "failure_type": "", "failed_texts": []}
-                    for i in range(total_concepts)
-                    for v in range(VARIATIONS_PER_CONCEPT)
-                ]
-                st.session_state.bulk_items = items
-                st.session_state.bulk_total = len(items)
-                st.session_state.stop_bulk  = False
-                st.rerun()
+        if st.button("↺ Reset & Regenerate All Questions", use_container_width=True,
+                     help="Clears all cached questions, then regenerates every question "
+                          "(all variations for every concept) — the full pool exams draw from"):
+            _preflight_or_abort()   # verify token BEFORE wiping the cache
+            st.session_state.generated_questions = {}
+            if os.path.exists(QUESTIONS_CACHE_FILE):
+                os.remove(QUESTIONS_CACHE_FILE)
+            items = [
+                {"concept_idx": i, "variation": v, "attempts": 0, "feedback": "", "failure_type": "", "failed_texts": []}
+                for i in range(total_concepts)
+                for v in range(VARIATIONS_PER_CONCEPT)
+            ]
+            st.session_state.bulk_items = items
+            st.session_state.bulk_total = len(items)
+            st.session_state.stop_bulk  = False
+            st.rerun()
 
     # --- Active batch generation loop (one batch per rerun) ---
     if bulk_items and not st.session_state.stop_bulk:
